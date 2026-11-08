@@ -1,0 +1,32 @@
+name: Windows build and test
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build and test
+        shell: cmd
+        run: build-windows.bat
+      - name: Test desktop workflow
+        run: python -m unittest discover -s tests -p gui_smoke.py -v
+      - name: Include corresponding source
+        run: git archive --format=zip --output=dist/UCAS-in-windows-source.zip HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: UCAS-Sign-in-Windows
+          path: |
+            dist/UCAS-Sign-in.exe
+            dist/build-verification.json
+            dist/UCAS-in-windows-source.zip
+            LICENSES/
+            VALIDATION.md
+            LICENSE
+            NOTICE
+            README.md

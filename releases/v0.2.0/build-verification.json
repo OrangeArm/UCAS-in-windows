@@ -1,0 +1,17 @@
+{
+  "ok": true,
+  "version": "0.2.0",
+  "python": "3.12.10",
+  "platform": "win32",
+  "frozen": true,
+  "checks": [
+    "window",
+    "defaults",
+    "login",
+    "courses",
+    "sign",
+    "duplicate_guard",
+    "no_saved_password",
+    "logout"
+  ]
+}

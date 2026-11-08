@@ -1,0 +1,32 @@
+UCAS-in-windows — Windows 精简课程签到客户端
+
+协议流程与部分解析规则改编自：
+  zhan-nine/UCAS-Sign-in
+  https://github.com/zhan-nine/UCAS-Sign-in
+  参考提交：19bda65be545487918dbf98cbf52762afebc7ae1
+  文件：android-app/app/src/main/java/com/ucas/qingxin/signin/network/QingxinApiService.kt
+  协议：GNU Affero General Public License v3.0
+
+该项目注明其课程查询与签到流程来源于：
+  lccipher/UCAS-Course-Sign-in
+  https://github.com/lccipher/UCAS-Course-Sign-in
+  协议：GNU Affero General Public License v3.0
+
+2026-11-08：将核心登录、查课和手动签到流程改写为 Python/Tkinter Windows
+客户端，移除 Android、自动签到、小部件、讲座发现与固定坐标备选通道。
+上游部分版权归各自作者所有；新增部分版权归本仓库贡献者所有。
+本衍生程序按 AGPL-3.0-or-later 分发，见 LICENSE。分发 EXE 时应同时提供
+本程序完整对应源码及本声明。本项目原先的 Apache-2.0 许可证文本保存在
+LICENSES/Apache-2.0.txt。未使用上游 LGPL 小部件代码。
+本项目与学校、上述作者无官方隶属或背书关系。
+
+2026-11-08，v0.2.0：加入公开上游的国科大默认接口、连接测试、配置校验、
+窗口操作改进，以及打包后的离线诊断。
+默认接口出处：lccipher/UCAS-Course-Sign-in，提交
+c04c4ab20c740bf6c1eeb19491f87a52a9911405，
+src/app/api/course-uuid/query/route.ts。
+
+EXE 通过 PyInstaller（GPL-2.0-or-later，含允许分发生成程序的 bootloader 例外）
+封装 Windows CPython 3.12 和 Tcl/Tk 8.6。附带的 Python 许可包含其第三方组件
+声明，见 LICENSES/Python-3.12.txt；Tk 许可见 LICENSES/Tk-8.6.txt。
+Tcl 与 PyInstaller 的许可分别见 LICENSES/Tcl-8.6.txt 和 LICENSES/PyInstaller.txt。
