@@ -42,7 +42,7 @@ class App:
         self.day = tk.StringVar(value=today())
         self.code = tk.StringVar()
         self.login_status = tk.StringVar(value='未登录')
-        self.status = tk.StringVar(value='已预填国科大轻新课堂接口，可以直接登录；也可先测试连接。')
+        self.status = tk.StringVar(value='请输入学校账号和密码登录。')
         frame = ttk.Frame(root, padding=18)
         frame.pack(fill='both', expand=True)
         header = ttk.Frame(frame)
@@ -51,21 +51,8 @@ class App:
         ttk.Label(frame, text='登录 → 查询课表 → 选中课程 → 签到。关闭窗口即退出登录。').pack(anchor='w', pady=(4, 12))
         self.login_badge = ttk.Label(header, textvariable=self.login_status, foreground='#666666', font=('Microsoft YaHei UI', 11, 'bold'))
         self.login_badge.pack(side='right')
-        config = ttk.LabelFrame(frame, text='学校接口（已预填；仅接口变更时需要修改）', padding=10)
-        config.pack(fill='x')
-        config.columnconfigure(1, weight=1)
         self.editables = []
-        for i, (label, var) in enumerate((('API 根地址', self.base), ('登录校验 URL 模板', self.verify))):
-            ttk.Label(config, text=label).grid(row=i, column=0, sticky='w', padx=(0, 8), pady=3)
-            entry = ttk.Entry(config, textvariable=var)
-            entry.grid(row=i, column=1, sticky='ew')
-            self.editables.append(entry)
         self.buttons = []
-        actions = ttk.Frame(config)
-        actions.grid(row=2, column=1, sticky='e', pady=(6, 0))
-        self.button(actions, '恢复默认', self.restore_defaults).pack(side='left', padx=4)
-        self.button(actions, '测试连接', self.test_connection).pack(side='left', padx=4)
-        self.button(actions, '保存配置', self.save_config).pack(side='left')
         login = ttk.Frame(frame)
         login.pack(fill='x', pady=12)
         ttk.Label(login, text='账号').pack(side='left')
@@ -269,7 +256,7 @@ class App:
 
     def require_login(self):
         if self.client is None or self.session is None:
-            messagebox.showinfo('请先登录', '请填写接口配置并登录学校账号。', parent=self.root)
+            messagebox.showinfo('请先登录', '请先输入学校账号和密码登录。', parent=self.root)
             return False
         if (self.base.get().strip().rstrip('/') + '/' != self.client.base_url
                 or self.verify.get().strip() != self.client.verify_template):

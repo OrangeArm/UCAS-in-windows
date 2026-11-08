@@ -1,0 +1,21 @@
+{
+  "ok": true,
+  "version": "0.3.1",
+  "python": "3.12.10",
+  "platform": "win32",
+  "frozen": true,
+  "checks": [
+    "window",
+    "defaults",
+    "login",
+    "courses",
+    "sign",
+    "duplicate_guard",
+    "grouped_courses",
+    "calendar_picker",
+    "login_badge",
+    "empty_timetable",
+    "no_saved_password",
+    "logout"
+  ]
+}

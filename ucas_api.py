@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-VERSION = '0.3.0'
+VERSION = '0.3.1'
 DEFAULT_API_BASE = 'https://iclass.ucas.edu.cn:8181/app/'
 DEFAULT_VERIFY_TEMPLATE = (
     'http://iclass.ucas.edu.cn:88/ve/webservices/mobileCheck.shtml'
