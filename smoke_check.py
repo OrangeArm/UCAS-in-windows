@@ -40,6 +40,7 @@ def run(app_class, report):
                     return io.BytesIO(json.dumps(payloads.pop(0)).encode())
             client = Client(DEFAULT_API_BASE, DEFAULT_VERIFY_TEMPLATE, OfflineTransport())
             def wait():
+                root.update()
                 deadline = time.monotonic() + 10
                 while app.busy and time.monotonic() < deadline:
                     root.update()
@@ -77,7 +78,22 @@ def run(app_class, report):
                 assert '已登录' in app.status.get()
                 app.save_config()
                 assert 'offline-password' not in app.settings_path.read_text(encoding='utf-8')
+                if app.session_store.supported:
+                    assert app.session_store.path.exists()
+                    assert b'offline-password' not in app.session_store.path.read_bytes()
+                    payloads.extend([{'STATUS': '0', 'result': []}, {'STATUS': '0'}])
+                    settings_path = app.settings_path
+                    root.destroy()
+                    root = tk.Tk()
+                    app = app_class(root, settings_path)
+                    wait()
+                    assert app.session is not None
+                    assert app.account.get() == 'offline-account'
+                    assert '已登录' in app.login_status.get()
+                    assert app.password.get() == ''
+                    result['encrypted_session_restore'] = True
                 app.logout()
+                assert not app.session_store.path.exists()
                 assert app.session is None
                 assert app.login_status.get() == '未登录'
                 error.assert_not_called()

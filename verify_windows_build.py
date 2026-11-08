@@ -17,7 +17,8 @@ def main():
         report = folder / 'result.json'
         subprocess.run([str(target), '--smoke-test', str(report)], check=True, timeout=90)
         result = json.loads(report.read_text(encoding='utf-8'))
-        if not result.get('ok') or not result.get('frozen') or result.get('platform') != 'win32':
+        if (not result.get('ok') or not result.get('frozen') or result.get('platform') != 'win32'
+                or not result.get('encrypted_session_restore')):
             raise RuntimeError(f'Frozen Windows verification failed: {result}')
         Path('dist/build-verification.json').write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding='utf-8')
         print('EXE verification passed: offline desktop workflow, including Unicode paths.')

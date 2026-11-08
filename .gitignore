@@ -6,3 +6,5 @@ dist/
 *.spec
 settings.json
 local.properties
+session.dat
+session-*.tmp

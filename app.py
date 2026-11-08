@@ -13,6 +13,7 @@ from ucas_api import (ApiError, SessionExpired, Client, DEFAULT_API_BASE, DEFAUL
                       VERSION, today, validate_base, validate_template)
 from course_view import group_courses, code_key, display_time
 from date_picker import DatePicker
+from session_store import SessionStore, StorageError
 
 
 def config_path():
@@ -20,9 +21,11 @@ def config_path():
 
 
 class App:
-    def __init__(self, root, settings_path=None):
+    def __init__(self, root, settings_path=None, session_store=None):
         self.root = root
         self.settings_path = settings_path or config_path()
+        self.session_store = session_store or SessionStore(self.settings_path.parent / 'session.dat')
+        self.restoring = False
         self.client = None
         self.session = None
         self.courses = []
@@ -42,13 +45,15 @@ class App:
         self.day = tk.StringVar(value=today())
         self.code = tk.StringVar()
         self.login_status = tk.StringVar(value='未登录')
+        self.remember_login = tk.BooleanVar(value=self.session_store.supported)
+        self.keep_status = tk.StringVar(value='仅本机加密保存会话，不保存密码。' if self.session_store.supported else '当前系统不支持 Windows 会话保存，仅本次登录。')
         self.status = tk.StringVar(value='请输入学校账号和密码登录。')
         frame = ttk.Frame(root, padding=18)
         frame.pack(fill='both', expand=True)
         header = ttk.Frame(frame)
         header.pack(fill='x')
         ttk.Label(header, text='UCAS 课程签到', font=('Microsoft YaHei UI', 18, 'bold')).pack(side='left')
-        ttk.Label(frame, text='登录 → 查询课表 → 选中课程 → 签到。关闭窗口即退出登录。').pack(anchor='w', pady=(4, 12))
+        ttk.Label(frame, text='登录 → 查询课表 → 选中课程 → 签到。勾选保持登录，下次打开自动恢复。').pack(anchor='w', pady=(4, 12))
         self.login_badge = ttk.Label(header, textvariable=self.login_status, foreground='#666666', font=('Microsoft YaHei UI', 11, 'bold'))
         self.login_badge.pack(side='right')
         self.editables = []
@@ -71,6 +76,14 @@ class App:
         self.editables.append(show)
         self.button(login, '登录', self.login).pack(side='left', padx=4)
         self.button(login, '退出登录', self.logout).pack(side='left')
+        keep = ttk.Frame(frame)
+        keep.pack(fill='x', pady=(0, 10))
+        self.remember_button = ttk.Checkbutton(keep, text='保持登录', variable=self.remember_login, command=self.remember_changed)
+        self.remember_button.pack(side='left')
+        self.editables.append(self.remember_button)
+        ttk.Label(keep, textvariable=self.keep_status, wraplength=650).pack(side='left', padx=8)
+        if not self.session_store.supported:
+            self.remember_button.configure(state='disabled')
         toolbar = ttk.Frame(frame)
         toolbar.pack(fill='x', pady=(0, 8))
         ttk.Label(toolbar, text='日期').pack(side='left')
@@ -108,18 +121,24 @@ class App:
                 raise ValueError('配置字段类型错误')
             self.base.set(validate_base(base))
             self.verify.set(validate_template(verify))
+            self.remember_login.set(self.session_store.supported and settings.get('remember_login', True) is True)
         except FileNotFoundError:
             pass
         except (OSError, ValueError, AttributeError, ApiError):
             self.base.set(DEFAULT_API_BASE)
             self.verify.set(DEFAULT_VERIFY_TEMPLATE)
             self.status.set('本地配置无效，已使用国科大默认接口；原配置文件没有被覆盖。')
+        if self.session_store.supported and not self.remember_login.get():
+            self.keep_status.set('未开启保持登录，关闭后需要重新登录。')
         self.poll_id = root.after(100, self.poll)
+        self.restore_id = root.after_idle(self.restore_saved_session)
         root.bind('<Destroy>', self.stop_poll, add='+')
 
     def stop_poll(self, event):
         if event.widget is self.root:
             self.root.after_cancel(self.poll_id)
+            if self.restore_id is not None:
+                self.root.after_cancel(self.restore_id)
 
     def button(self, parent, text, command):
         b = ttk.Button(parent, text=text, command=command)
@@ -127,6 +146,12 @@ class App:
         return b
 
     def clear_login(self):
+        erased = True
+        try:
+            self.session_store.clear()
+        except StorageError as exc:
+            self.keep_status.set(str(exc))
+            erased = False
         self.session = None
         self.client = None
         self.courses = []
@@ -134,8 +159,10 @@ class App:
         self.row_targets = {}
         self.login_pending = False
         self.logged_account = ''
+        self.restoring = False
         self.set_login_state('未登录')
         self.table.delete(*self.table.get_children())
+        return erased
 
     def set_login_state(self, state, color='#666666'):
         self.login_status.set(state)
@@ -145,15 +172,63 @@ class App:
         try:
             base = validate_base(self.base.get())
             template = validate_template(self.verify.get())
-            self.settings_path.parent.mkdir(parents=True, exist_ok=True)
-            temp = self.settings_path.with_suffix('.tmp')
-            temp.write_text(json.dumps({'api_base_url': base, 'verify_url_template': template}, ensure_ascii=False, indent=2), encoding='utf-8')
-            temp.replace(self.settings_path)
+            self.save_preferences()
             if self.client and (base != self.client.base_url or template != self.client.verify_template):
                 self.clear_login()
             self.status.set('配置已保存。' if self.session else '配置已保存，请登录。')
         except (OSError, ApiError, ValueError) as exc:
             messagebox.showerror('配置未保存', str(exc), parent=self.root)
+
+    def save_preferences(self):
+        self.settings_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.settings_path.with_suffix('.tmp')
+        temporary.write_text(json.dumps({'api_base_url': self.base.get(), 'verify_url_template': self.verify.get(),
+                                         'remember_login': self.remember_login.get()}, ensure_ascii=False, indent=2), encoding='utf-8')
+        temporary.replace(self.settings_path)
+
+    def remember_changed(self):
+        if not self.remember_login.get():
+            try:
+                self.session_store.clear()
+                self.save_preferences()
+                self.keep_status.set('已关闭保持登录；关闭程序后需要重新登录。')
+            except (StorageError, OSError):
+                self.keep_status.set('未能清除或保存登录设置，请检查应用数据目录权限。')
+                messagebox.showerror('保存失败', self.keep_status.get(), parent=self.root)
+        else:
+            self.persist_session()
+
+    def persist_session(self):
+        try:
+            self.save_preferences()
+            if self.remember_login.get() and self.session_store.supported and self.session:
+                self.session_store.save(self.session, self.logged_account, self.client.base_url, self.client.verify_template)
+                self.keep_status.set('会话已加密保存，下次打开自动恢复；不保存密码。')
+            elif self.remember_login.get():
+                self.keep_status.set('成功登录后将加密保存本机会话，不保存密码。')
+            else:
+                self.keep_status.set('仅本次登录，关闭程序后需要重新登录。')
+        except (StorageError, OSError):
+            self.keep_status.set('本机会话未能保存，下次打开需要重新登录。')
+
+    def restore_saved_session(self):
+        self.restore_id = None
+        if not self.remember_login.get() or not self.session_store.supported:
+            return
+        try:
+            saved = self.session_store.load(self.base.get(), self.verify.get())
+            if saved is None:
+                return
+            self.client = Client(self.base.get(), self.verify.get())
+            self.session, self.logged_account = saved
+            self.account.set(self.logged_account)
+            self.restoring = True
+            self.set_login_state('正在恢复登录…', '#9a6700')
+            self.keep_status.set('已读取本机加密会话，正在向学校验证…')
+            self.refresh()
+        except (StorageError, ApiError):
+            self.clear_login()
+            self.keep_status.set('本机保存的登录信息无法恢复，请重新登录。')
 
     def run(self, work, done):
         if self.busy:
@@ -185,6 +260,8 @@ class App:
             self.progress.stop()
             for widget in self.buttons + self.editables:
                 widget.configure(state='normal')
+            if not self.session_store.supported:
+                self.remember_button.configure(state='disabled')
             if error:
                 if self.login_pending:
                     self.clear_login()
@@ -192,6 +269,10 @@ class App:
                 elif isinstance(error, SessionExpired):
                     self.clear_login()
                     self.set_login_state('登录已失效 · 请重新登录', '#b42318')
+                    self.keep_status.set('学校会话已失效，重新登录后可继续保持。')
+                elif self.restoring:
+                    self.set_login_state('登录待验证 · 请检查网络', '#9a6700')
+                    self.keep_status.set('已保存的会话保留，网络恢复后点击查询课表重试。')
                 self.status.set(str(error))
                 messagebox.showerror('操作失败', str(error), parent=self.root)
             else:
@@ -214,6 +295,7 @@ class App:
             self.client, self.session = client, session
             self.logged_account = account.strip()
             self.set_login_state(f'已登录 · {self.logged_account}', '#087443')
+            self.persist_session()
             self.status.set('登录成功，可以查询课表。')
             self.refresh()
         self.login_pending = True
@@ -221,10 +303,14 @@ class App:
         self.run(lambda: client.login(account, password), done)
 
     def logout(self):
-        self.clear_login()
+        erased = self.clear_login()
         self.password.set('')
         self.account.set('')
-        self.status.set('已退出登录。')
+        self.status.set('已退出登录，并清除本机保存的会话。' if erased else '已退出本次登录，但本机会话文件无法删除。')
+        if erased:
+            self.keep_status.set('本机保存的会话已清除。')
+        else:
+            messagebox.showerror('会话未清除', self.keep_status.get(), parent=self.root)
 
     def restore_defaults(self):
         self.clear_login()
@@ -273,6 +359,10 @@ class App:
         self.courses = []
         self.render_courses()
         def done(courses):
+            if self.restoring:
+                self.restoring = False
+                self.set_login_state(f'已登录 · {self.logged_account}', '#087443')
+                self.keep_status.set('已恢复本机登录；不保存密码。')
             self.loaded_day = day
             self.courses = courses
             self.render_courses()

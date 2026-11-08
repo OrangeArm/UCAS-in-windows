@@ -8,7 +8,9 @@ from unittest.mock import patch
 
 from app import App
 from ucas_api import Client
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
+from session_store import SessionStore, WindowsProtection
+from test_session_store import TestProtection
 from test_api import BASE, VERIFY, CLOCK, LOGIN, SUCCESS, FakeOpener
 
 
@@ -122,12 +124,80 @@ class DesktopSmoke(unittest.TestCase):
                 wait()
                 self.assertIsNone(app.session)
                 self.assertIn('登录已失效', app.login_status.get())
+                self.assertFalse(app.session_store.path.exists())
                 transport.responses.append({'STATUS': '1'})
                 app.password.set('incorrect')
                 app.login()
                 wait()
                 self.assertIsNone(app.session)
                 self.assertIn('登录失败', app.login_status.get())
+
+    def test_keep_login_reopen_offline_retry_and_opt_out(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            protection = WindowsProtection() if __import__('os').name == 'nt' else TestProtection()
+            roots = []
+            def cleanup():
+                for r in roots:
+                    try:
+                        r.destroy()
+                    except tk.TclError:
+                        pass
+            self.addCleanup(cleanup)
+            def create():
+                root = tk.Tk()
+                roots.append(root)
+                store = SessionStore(folder / 'session.dat', protection)
+                return root, App(root, folder / 'settings.json', session_store=store)
+            def wait(root, app):
+                deadline = time.monotonic() + 8
+                root.update()  # includes startup's idle restore callback
+                while app.busy and time.monotonic() < deadline:
+                    root.update()
+                    time.sleep(.01)
+                self.assertFalse(app.busy)
+                root.update()
+            rows = {'STATUS': '0', 'result': [{'id': '1234567', 'courseName': '测试课程'}]}
+            first = FakeOpener(LOGIN, rows)
+            with patch('app.Client', return_value=Client(BASE, VERIFY, first)), \
+                    patch('app.messagebox.showerror') as errors:
+                root, app = create()
+                app.base.set(BASE)
+                app.verify.set(VERIFY)
+                app.account.set('test-account')
+                app.password.set('never-save-this-password')
+                app.login()
+                wait(root, app)
+                self.assertTrue(app.session_store.path.exists())
+                self.assertNotIn(b'secret-session', app.session_store.path.read_bytes())
+                self.assertNotIn('never-save-this-password', app.settings_path.read_text())
+                root.destroy()  # closing preserves the encrypted session
+                self.assertTrue((folder / 'session.dat').exists())
+                second = FakeOpener(URLError('offline'), rows)
+                with patch('app.Client', return_value=Client(BASE, VERIFY, second)):
+                    root, app = create()
+                    wait(root, app)
+                    self.assertIn('登录待验证', app.login_status.get())
+                    self.assertTrue(app.session_store.path.exists())
+                    app.refresh()
+                    wait(root, app)
+                    self.assertIn('已登录', app.login_status.get())
+                    self.assertEqual(app.account.get(), 'test-account')
+                    self.assertEqual(app.password.get(), '')
+                    self.assertTrue(all('login.action' not in req.full_url for req in second.requests))
+                    self.assertEqual(second.requests[-1].get_header('Sessionid'), 'secret-session')
+                    app.remember_login.set(False)
+                    app.remember_changed()
+                    self.assertFalse(app.session_store.path.exists())
+                    self.assertIsNotNone(app.session)
+                    root.destroy()
+                with patch('app.Client') as unused:
+                    root, app = create()
+                    wait(root, app)
+                    unused.assert_not_called()
+                    self.assertFalse(app.remember_login.get())
+                    self.assertIsNone(app.session)
+                self.assertEqual(errors.call_count, 1)  # only the intentionally offline restore
 
 
 if __name__ == '__main__':
