@@ -33,3 +33,6 @@ Tcl 与 PyInstaller 的许可分别见 LICENSES/Tcl-8.6.txt 和 LICENSES/PyInsta
 
 v0.2.1：日课表查询方式对齐 lccipher/UCAS-Course-Sign-in 的 GET 请求，
 修复空课表与会话失效的错误分类，补充相关回归测试。
+
+v0.3.0：新增 Python/Tk 原生日历、课程展示分组与常驻登录状态。
+分组仅作用于显示；不同签到编号独立保留，不自动批量提交。

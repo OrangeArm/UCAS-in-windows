@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-VERSION = '0.2.1'
+VERSION = '0.3.0'
 DEFAULT_API_BASE = 'https://iclass.ucas.edu.cn:8181/app/'
 DEFAULT_VERIFY_TEMPLATE = (
     'http://iclass.ucas.edu.cn:88/ve/webservices/mobileCheck.shtml'
@@ -33,6 +33,10 @@ def validate_template(value):
 
 class ApiError(Exception):
     """Safe, user-facing error (never includes request URLs or credentials)."""
+
+
+class SessionExpired(ApiError):
+    """The server explicitly reports an unusable login session."""
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -96,7 +100,7 @@ def check_schedule_auth(root):
     # A nonzero STATUS alone does not prove that the session expired.
     message = school_message(root)
     if re.search(r'未登录|登录.*(?:失效|过期)|会话.*(?:失效|过期)|session.*(?:invalid|expired)', message, re.I):
-        raise ApiError('学校明确提示登录或会话失效，请重新登录')
+        raise SessionExpired('学校明确提示登录或会话失效，请重新登录')
 
 
 @dataclass(frozen=True)
@@ -113,6 +117,7 @@ class Course:
     begin: str
     end: str
     signed: bool
+    teacher: str = ''
 
 
 @dataclass(frozen=True)
@@ -164,7 +169,9 @@ class Client:
                 raise ValueError()
             return root
         except HTTPError as exc:
-            if exc.code in (401, 403):
+            if exc.code == 401:
+                raise SessionExpired('登录已失效，请重新登录') from None
+            if exc.code == 403:
                 raise ApiError('访问被拒绝或登录已失效，请检查网络并重新登录') from None
             raise ApiError(f'HTTP {exc.code}：请求失败（重定向也会被拒绝），请检查 API 地址') from None
         except (URLError, TimeoutError, OSError):
@@ -225,7 +232,7 @@ class Client:
         if any(not isinstance(r, dict) for r in rows):
             raise schedule_error('日课表', root)
         return [Course(text(r, 'id') or text(r, 'uuid'), text(r, 'courseName') or '未命名课程',
-                       text(r, 'classBeginTime'), text(r, 'classEndTime'), text(r, 'signStatus') == '1')
+                       text(r, 'classBeginTime'), text(r, 'classEndTime'), text(r, 'signStatus') == '1', text(r, 'teacherName'))
                 for r in rows if isinstance(r, dict)]
 
     def sign(self, session, code):

@@ -9,8 +9,10 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from ucas_api import (ApiError, Client, DEFAULT_API_BASE, DEFAULT_VERIFY_TEMPLATE,
+from ucas_api import (ApiError, SessionExpired, Client, DEFAULT_API_BASE, DEFAULT_VERIFY_TEMPLATE,
                       VERSION, today, validate_base, validate_template)
+from course_view import group_courses, code_key, display_time
+from date_picker import DatePicker
 
 
 def config_path():
@@ -24,6 +26,10 @@ class App:
         self.client = None
         self.session = None
         self.courses = []
+        self.groups = []
+        self.row_targets = {}
+        self.login_pending = False
+        self.logged_account = ''
         self.busy = False
         self.events = queue.Queue()
         root.title(f'UCAS 课程签到 · v{VERSION}')
@@ -35,11 +41,16 @@ class App:
         self.password = tk.StringVar()
         self.day = tk.StringVar(value=today())
         self.code = tk.StringVar()
+        self.login_status = tk.StringVar(value='未登录')
         self.status = tk.StringVar(value='已预填国科大轻新课堂接口，可以直接登录；也可先测试连接。')
         frame = ttk.Frame(root, padding=18)
         frame.pack(fill='both', expand=True)
-        ttk.Label(frame, text='UCAS 课程签到', font=('Microsoft YaHei UI', 18, 'bold')).pack(anchor='w')
+        header = ttk.Frame(frame)
+        header.pack(fill='x')
+        ttk.Label(header, text='UCAS 课程签到', font=('Microsoft YaHei UI', 18, 'bold')).pack(side='left')
         ttk.Label(frame, text='登录 → 查询课表 → 选中课程 → 签到。关闭窗口即退出登录。').pack(anchor='w', pady=(4, 12))
+        self.login_badge = ttk.Label(header, textvariable=self.login_status, foreground='#666666', font=('Microsoft YaHei UI', 11, 'bold'))
+        self.login_badge.pack(side='right')
         config = ttk.LabelFrame(frame, text='学校接口（已预填；仅接口变更时需要修改）', padding=10)
         config.pack(fill='x')
         config.columnconfigure(1, weight=1)
@@ -75,17 +86,16 @@ class App:
         self.button(login, '退出登录', self.logout).pack(side='left')
         toolbar = ttk.Frame(frame)
         toolbar.pack(fill='x', pady=(0, 8))
-        ttk.Label(toolbar, text='日期 YYYYMMDD').pack(side='left')
-        e = ttk.Entry(toolbar, textvariable=self.day, width=12)
-        e.pack(side='left', padx=6)
-        self.editables.append(e)
+        ttk.Label(toolbar, text='日期').pack(side='left')
+        self.date_picker = DatePicker(toolbar, self.day, self.date_changed)
+        self.date_picker.pack(side='left', padx=4)
         self.button(toolbar, '查询课表', self.refresh).pack(side='left')
         self.button(toolbar, '今天', self.go_today).pack(side='left', padx=4)
         self.button(toolbar, '签到选中课程', self.sign_selected).pack(side='right')
         table_frame = ttk.Frame(frame)
         table_frame.pack(fill='both', expand=True)
-        self.table = ttk.Treeview(table_frame, columns=('name', 'begin', 'end', 'state'), show='headings', selectmode='browse', height=8)
-        for col, name, width in [('name', '课程', 280), ('begin', '开始', 150), ('end', '结束', 150), ('state', '状态', 90)]:
+        self.table = ttk.Treeview(table_frame, columns=('begin', 'end', 'state'), show='tree headings', selectmode='browse', height=8)
+        for col, name, width in [('#0', '课程（可展开查看签到记录）', 380), ('begin', '开始', 90), ('end', '结束', 90), ('state', '状态', 100)]:
             self.table.heading(col, text=name)
             self.table.column(col, width=width, minwidth=70)
         self.table.pack(side='left', fill='both', expand=True)
@@ -117,7 +127,12 @@ class App:
             self.base.set(DEFAULT_API_BASE)
             self.verify.set(DEFAULT_VERIFY_TEMPLATE)
             self.status.set('本地配置无效，已使用国科大默认接口；原配置文件没有被覆盖。')
-        root.after(100, self.poll)
+        self.poll_id = root.after(100, self.poll)
+        root.bind('<Destroy>', self.stop_poll, add='+')
+
+    def stop_poll(self, event):
+        if event.widget is self.root:
+            self.root.after_cancel(self.poll_id)
 
     def button(self, parent, text, command):
         b = ttk.Button(parent, text=text, command=command)
@@ -128,7 +143,16 @@ class App:
         self.session = None
         self.client = None
         self.courses = []
+        self.groups = []
+        self.row_targets = {}
+        self.login_pending = False
+        self.logged_account = ''
+        self.set_login_state('未登录')
         self.table.delete(*self.table.get_children())
+
+    def set_login_state(self, state, color='#666666'):
+        self.login_status.set(state)
+        self.login_badge.configure(foreground=color)
 
     def save_config(self):
         try:
@@ -138,8 +162,9 @@ class App:
             temp = self.settings_path.with_suffix('.tmp')
             temp.write_text(json.dumps({'api_base_url': base, 'verify_url_template': template}, ensure_ascii=False, indent=2), encoding='utf-8')
             temp.replace(self.settings_path)
-            self.clear_login()
-            self.status.set('配置已保存，请登录。')
+            if self.client and (base != self.client.base_url or template != self.client.verify_template):
+                self.clear_login()
+            self.status.set('配置已保存。' if self.session else '配置已保存，请登录。')
         except (OSError, ApiError, ValueError) as exc:
             messagebox.showerror('配置未保存', str(exc), parent=self.root)
 
@@ -147,6 +172,7 @@ class App:
         if self.busy:
             return
         self.busy = True
+        self.date_picker.set_enabled(False)
         self.progress.start(12)
         for widget in self.buttons + self.editables:
             widget.configure(state='disabled')
@@ -155,7 +181,7 @@ class App:
             try:
                 self.events.put((done, work(), None))
             except ApiError as exc:
-                self.events.put((done, None, str(exc)))
+                self.events.put((done, None, exc))
             except Exception:
                 # Unexpected exception details may contain credentials/URLs.
                 self.events.put((done, None, '操作失败：响应格式异常或程序发生错误，请检查配置后重试'))
@@ -168,15 +194,22 @@ class App:
             pass
         else:
             self.busy = False
+            self.date_picker.set_enabled(True)
             self.progress.stop()
             for widget in self.buttons + self.editables:
                 widget.configure(state='normal')
             if error:
-                self.status.set(error)
-                messagebox.showerror('操作失败', error, parent=self.root)
+                if self.login_pending:
+                    self.clear_login()
+                    self.set_login_state('登录失败 · 请检查账号、密码或网络', '#b42318')
+                elif isinstance(error, SessionExpired):
+                    self.clear_login()
+                    self.set_login_state('登录已失效 · 请重新登录', '#b42318')
+                self.status.set(str(error))
+                messagebox.showerror('操作失败', str(error), parent=self.root)
             else:
                 done(result)
-        self.root.after(100, self.poll)
+        self.poll_id = self.root.after(100, self.poll)
 
     def login(self):
         if self.busy:
@@ -190,9 +223,14 @@ class App:
         account, password = self.account.get(), self.password.get()
         self.password.set('')
         def done(session):
+            self.login_pending = False
             self.client, self.session = client, session
+            self.logged_account = account.strip()
+            self.set_login_state(f'已登录 · {self.logged_account}', '#087443')
             self.status.set('登录成功，可以查询课表。')
             self.refresh()
+        self.login_pending = True
+        self.set_login_state('正在登录…', '#9a6700')
         self.run(lambda: client.login(account, password), done)
 
     def logout(self):
@@ -221,8 +259,13 @@ class App:
 
     def go_today(self):
         self.day.set(today())
+        self.date_changed()
+
+    def date_changed(self):
         if self.session is not None:
             self.refresh()
+        else:
+            self.status.set('日期已选择，请先登录后查询课程。')
 
     def require_login(self):
         if self.client is None or self.session is None:
@@ -239,14 +282,38 @@ class App:
         if not self.require_login():
             return
         day = self.day.get().strip()
+        # Never leave an old day's actionable rows under a newly selected date.
+        self.courses = []
+        self.render_courses()
         def done(courses):
             self.loaded_day = day
             self.courses = courses
-            self.table.delete(*self.table.get_children())
-            for i, course in enumerate(courses):
-                self.table.insert('', 'end', iid=str(i), values=(course.name, course.begin, course.end, '已签到' if course.signed else '未签到'))
-            self.status.set(f'{day}：共 {len(courses)} 门课程。' if courses else f'已登录 · {day}：学校未返回该日课程，可切换到确定有课的日期。')
+            self.render_courses()
+            count = f'（原始 {len(courses)} 条记录，已合并显示）' if len(courses) != len(self.groups) else ''
+            self.status.set(f'{day}：共 {len(self.groups)} 门课程{count}。' if courses else f'已登录 · {day}：学校未返回该日课程，可切换到确定有课的日期。')
         self.run(lambda: self.client.courses(self.session, day), done)
+
+    def render_courses(self):
+        expanded = {iid for iid in self.table.get_children() if self.table.item(iid, 'open')}
+        selection = self.table.selection()
+        self.groups = group_courses(self.courses)
+        self.row_targets = {}
+        self.table.delete(*self.table.get_children())
+        for i, group in enumerate(self.groups):
+            iid = str(i)
+            title = group.name + (f'（{len(group.records)} 条记录）' if len(group.records) > 1 else '')
+            self.table.insert('', 'end', iid=iid, text=title, open=iid in expanded,
+                              values=(display_time(group.begin), display_time(group.end), group.state))
+            self.row_targets[iid] = group
+            if len(group.records) > 1:
+                for j, record in enumerate(group.records):
+                    child = f'{iid}:{j}'
+                    title = f'{record.teacher + " · " if record.teacher else ""}编号 {record.code or "缺失"}'
+                    self.table.insert(iid, 'end', iid=child, text=title,
+                                      values=(display_time(record.begin), display_time(record.end), '已签到' if record.signed else '未签到'))
+                    self.row_targets[child] = record
+        if selection and self.table.exists(selection[0]):
+            self.table.selection_set(selection[0])
 
     def sign_selected(self):
         if not self.require_login():
@@ -255,11 +322,21 @@ class App:
         if not selection:
             messagebox.showinfo('请选择课程', '先查询课表并选中一门课程。', parent=self.root)
             return
-        course = self.courses[int(selection[0])]
+        target = self.row_targets[selection[0]]
+        from course_view import CourseGroup
+        if isinstance(target, CourseGroup):
+            pending = [record for record in target.records if not record.signed]
+            if len(pending) > 1:
+                self.table.item(selection[0], open=True)
+                self.status.set('此课程含多个不同签到编号，已展开；请选择一条对应记录后签到。')
+                return
+            course = pending[0] if pending else target.records[0]
+        else:
+            course = target
         if course.signed:
             self.status.set('这门课程已签到，无需再次提交。')
             return
-        self.submit(course.code, f'{self.loaded_day} · {course.name}')
+        self.submit(course.code, f'{self.loaded_day} · {course.name}' + (f' · {course.teacher}' if course.teacher else ''))
 
     def sign_manual(self):
         if self.require_login():
@@ -279,9 +356,9 @@ class App:
             if result.ok:
                 # Reflect only an explicit server confirmation. Refresh remains user-controlled.
                 for i, course in enumerate(self.courses):
-                    if course.code.replace('-', '').upper() == code.replace('-', '').upper():
+                    if code_key(course.code) == code_key(code):
                         self.courses[i] = replace(course, signed=True)
-                        self.table.set(str(i), 'state', '已签到')
+                self.render_courses()
                 messagebox.showinfo('签到结果', result.message, parent=self.root)
             else:
                 messagebox.showwarning('学校未确认签到', result.message, parent=self.root)

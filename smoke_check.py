@@ -27,7 +27,7 @@ def run(app_class, report):
             assert app.verify.get() == DEFAULT_VERIFY_TEMPLATE
             payloads = [
                 {'STATUS': '0', 'result': {'id': 'offline-user', 'sessionId': 'offline-session', 'studentNo': 'offline-student'}},
-                {'STATUS': '0', 'result': [{'id': '1234567', 'courseName': '离线测试课程', 'signStatus': '0'}]},
+                {'STATUS': '0', 'result': [{'id': '1234567', 'courseName': '离线测试课程', 'signStatus': '0'}] * 2},
                 {'STATUS': '0', 'timestamp': 1794100000000},
                 {'STATUS': '0', 'result': {'stuSignStatus': '1'}},
                 {'STATUS': '1'},
@@ -54,7 +54,9 @@ def run(app_class, report):
                 app.password.set('offline-password')
                 app.login()
                 wait()
-                assert len(app.courses) == 1
+                assert len(app.courses) == 2
+                assert len(app.groups) == 1 and len(app.groups[0].records) == 1
+                assert '已登录' in app.login_status.get()
                 app.table.selection_set('0')
                 app.sign_selected()
                 wait()
@@ -62,9 +64,14 @@ def run(app_class, report):
                 assert app.table.set('0', 'state') == '已签到'
                 app.sign_selected()
                 assert len(requests) == 4
-                app.day.set('20261109')
-                app.refresh()
+                app.date_picker.open_calendar()
+                popup = app.date_picker.popup
+                popup.year.set('2024')
+                popup.month.set('2')
+                popup.render()
+                popup.day_buttons[29].invoke()
                 wait()
+                assert app.day.get() == '20240229'
                 assert not app.courses
                 assert app.session is not None
                 assert '已登录' in app.status.get()
@@ -72,9 +79,10 @@ def run(app_class, report):
                 assert 'offline-password' not in app.settings_path.read_text(encoding='utf-8')
                 app.logout()
                 assert app.session is None
+                assert app.login_status.get() == '未登录'
                 error.assert_not_called()
             result.update(ok=True, checks=['window', 'defaults', 'login', 'courses', 'sign',
-                                           'duplicate_guard', 'empty_timetable', 'no_saved_password', 'logout'])
+                                           'duplicate_guard', 'grouped_courses', 'calendar_picker', 'login_badge', 'empty_timetable', 'no_saved_password', 'logout'])
     except Exception as exc:
         result['error_type'] = type(exc).__name__
     finally:
