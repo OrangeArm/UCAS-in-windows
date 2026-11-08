@@ -78,7 +78,9 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(courses[0].signed)
         self.assertEqual(courses[1].code, 'a' * 32)
         self.assertEqual(transport.requests[0].get_header('Sessionid'), 'secret-session')
-        self.assertEqual(parse_qs(transport.requests[0].data.decode())['dateStr'], ['20261108'])
+        self.assertEqual(transport.requests[0].get_method(), 'GET')
+        self.assertIsNone(transport.requests[0].data)
+        self.assertEqual(parse_qs(urlsplit(transport.requests[0].full_url).query)['dateStr'], ['20261108'])
 
     def test_week_fallback_only_returns_requested_day(self):
         client, _ = self.client({'STATUS': '0', 'result': []}, {'STATUS': '1', 'result': [
@@ -86,10 +88,37 @@ class ApiTests(unittest.TestCase):
             {'dateStr': '20261109', 'schedData': [{'id': '9999999'}]}]})
         self.assertEqual([c.code for c in client.courses(SESSION, '20261108')], ['1234567'])
 
-    def test_invalid_course_responses_are_not_no_courses(self):
-        for root in [{'STATUS': '1', 'result': []}, {'STATUS': '0', 'result': None}]:
-            with self.subTest(root=root), self.assertRaises(ApiError):
-                self.client(root)[0].courses(SESSION, '20261108')
+    def test_nonzero_day_status_falls_back_to_week(self):
+        client, transport = self.client({'STATUS': '1'}, {'STATUS': '1', 'result': [
+            {'dateStr': '2026-11-08', 'schedData': [{'id': '1234567', 'courseName': '课程'}]}]})
+        self.assertEqual(client.courses(SESSION, '20261108')[0].code, '1234567')
+        self.assertEqual(len(transport.requests), 2)
+
+    def test_no_courses_is_not_login_failure(self):
+        for week in [{'STATUS': '0'}, {'STATUS': '0', 'result': []}, {'STATUS': '1', 'result': []},
+                     {'STATUS': '1', 'result': [{'dateStr': '20261109', 'schedData': [{'id': '1234567'}]}]}]:
+            with self.subTest(week=week):
+                self.assertEqual(self.client({'STATUS': '1'}, week)[0].courses(SESSION, '20261108'), [])
+
+    def test_explicit_session_expiry_never_becomes_empty_courses(self):
+        for responses in [({'STATUS': '1', 'ERRMSG': '登录已失效'},),
+                          ({'STATUS': '1'}, {'STATUS': '0', 'ERRMSG': '会话过期'})]:
+            client, _ = self.client(*responses)
+            with self.subTest(responses=responses), self.assertRaisesRegex(ApiError, '登录或会话失效'):
+                client.courses(SESSION, '20261108')
+
+    def test_invalid_course_responses_include_codes_not_login_guess(self):
+        for week in [{'STATUS': '9', 'ERRCODE': '100'}, {'STATUS': '1', 'result': None},
+                     {'STATUS': '1', 'result': ['bad']},
+                     {'STATUS': '1', 'result': [{'dateStr': '20261108', 'schedData': None}]},
+                     {'STATUS': '1', 'result': [], 'ERRCODE': '100'}]:
+            with self.subTest(week=week):
+                client, _ = self.client({'STATUS': '1'}, week)
+                with self.assertRaises(ApiError) as error:
+                    client.courses(SESSION, '20261108')
+                self.assertIn('STATUS=', str(error.exception))
+                self.assertNotIn('请重新登录', str(error.exception))
+                self.assertNotIn(SESSION.session_id, str(error.exception))
 
     def test_sign_uses_school_clock(self):
         client, transport = self.client(CLOCK, SUCCESS)

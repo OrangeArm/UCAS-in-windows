@@ -30,6 +30,8 @@ def run(app_class, report):
                 {'STATUS': '0', 'result': [{'id': '1234567', 'courseName': '离线测试课程', 'signStatus': '0'}]},
                 {'STATUS': '0', 'timestamp': 1794100000000},
                 {'STATUS': '0', 'result': {'stuSignStatus': '1'}},
+                {'STATUS': '1'},
+                {'STATUS': '0'},
             ]
             requests = []
             class OfflineTransport:
@@ -60,13 +62,19 @@ def run(app_class, report):
                 assert app.table.set('0', 'state') == '已签到'
                 app.sign_selected()
                 assert len(requests) == 4
+                app.day.set('20261109')
+                app.refresh()
+                wait()
+                assert not app.courses
+                assert app.session is not None
+                assert '已登录' in app.status.get()
                 app.save_config()
                 assert 'offline-password' not in app.settings_path.read_text(encoding='utf-8')
                 app.logout()
                 assert app.session is None
                 error.assert_not_called()
             result.update(ok=True, checks=['window', 'defaults', 'login', 'courses', 'sign',
-                                           'duplicate_guard', 'no_saved_password', 'logout'])
+                                           'duplicate_guard', 'empty_timetable', 'no_saved_password', 'logout'])
     except Exception as exc:
         result['error_type'] = type(exc).__name__
     finally:

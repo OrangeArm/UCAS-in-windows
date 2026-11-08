@@ -1,17 +1,24 @@
 # UCAS-in-windows
 
-国科大轻新课堂 / iClass 的 Windows 精简签到程序，版本 **0.2.0**。
+国科大轻新课堂 / iClass 的 Windows 精简签到程序，版本 **0.2.1**。
 保留账号登录、查课表、选课签到、手动课程 ID / UUID 签到；无需 Android 环境。
 学校接口已预填，普通使用只需输入自己的账号和密码。
 
+## v0.2.1 修复
+
+- 日课表改为上游使用的 GET 请求。
+- 日课表状态非零或缺少数据时继续查周课表，兼容周课表的空数据响应。
+- 当天无课不再一律提示“请重新登录”；仅在学校明确提示会话失效时这样提示。
+- 异常课表响应显示状态码，方便进一步定位；仍需用真实有课日期验证实际课表。
+
 ## 下载
 
-- [直接下载 Windows x64 EXE](https://github.com/OrangeArm/UCAS-in-windows/raw/refs/heads/main/releases/v0.2.0/UCAS-Sign-in.exe)
+- [直接下载 Windows x64 EXE](https://github.com/OrangeArm/UCAS-in-windows/raw/refs/heads/main/releases/v0.2.1/UCAS-Sign-in.exe)
 - [下载完整源码及许可证](https://github.com/OrangeArm/UCAS-in-windows/archive/refs/heads/main.zip)
-- [查看文件校验值和 EXE 验证结果](releases/v0.2.0/)
+- [查看文件校验值和 EXE 验证结果](releases/v0.2.1/)
 
 EXE 已包含运行所需组件，单文件下载即可使用。若下载整个仓库，程序在
-`releases/v0.2.0/UCAS-Sign-in.exe`。源码与许可证随仓库一同提供。
+`releases/v0.2.1/UCAS-Sign-in.exe`。源码与许可证随仓库一同提供。
 
 ## 使用 EXE
 

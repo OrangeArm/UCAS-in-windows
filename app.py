@@ -245,7 +245,7 @@ class App:
             self.table.delete(*self.table.get_children())
             for i, course in enumerate(courses):
                 self.table.insert('', 'end', iid=str(i), values=(course.name, course.begin, course.end, '已签到' if course.signed else '未签到'))
-            self.status.set(f'{day}：共 {len(courses)} 门课程。' if courses else f'{day}：学校未返回该日课程。')
+            self.status.set(f'{day}：共 {len(courses)} 门课程。' if courses else f'已登录 · {day}：学校未返回该日课程，可切换到确定有课的日期。')
         self.run(lambda: self.client.courses(self.session, day), done)
 
     def sign_selected(self):

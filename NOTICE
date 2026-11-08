@@ -30,3 +30,6 @@ EXE 通过 PyInstaller（GPL-2.0-or-later，含允许分发生成程序的 bootl
 封装 Windows CPython 3.12 和 Tcl/Tk 8.6。附带的 Python 许可包含其第三方组件
 声明，见 LICENSES/Python-3.12.txt；Tk 许可见 LICENSES/Tk-8.6.txt。
 Tcl 与 PyInstaller 的许可分别见 LICENSES/Tcl-8.6.txt 和 LICENSES/PyInstaller.txt。
+
+v0.2.1：日课表查询方式对齐 lccipher/UCAS-Course-Sign-in 的 GET 请求，
+修复空课表与会话失效的错误分类，补充相关回归测试。

@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
-VERSION = '0.2.0'
+VERSION = '0.2.1'
 DEFAULT_API_BASE = 'https://iclass.ucas.edu.cn:8181/app/'
 DEFAULT_VERIFY_TEMPLATE = (
     'http://iclass.ucas.edu.cn:88/ve/webservices/mobileCheck.shtml'
@@ -79,6 +79,24 @@ def school_message(root):
     result = result if isinstance(result, dict) else {}
     return (text(result, 'msg') or text(root, 'ERRMSG') or text(root, 'msg')
             or text(root, 'message'))
+
+
+def schedule_error(stage, root):
+    """Keep status codes visible without dumping identities or full responses."""
+    codes = []
+    for key in ('STATUS', 'ERRCODE'):
+        value = text(root, key)
+        if re.fullmatch(r'[A-Za-z0-9_.-]{1,32}', value):
+            codes.append(f'{key}={value}')
+    detail = '，'.join(codes) or '无状态码'
+    return ApiError(f'{stage}未返回可用课表（{detail}）。请确认所选日期有课；若轻新课堂有课，请反馈这些状态码。')
+
+
+def check_schedule_auth(root):
+    # A nonzero STATUS alone does not prove that the session expired.
+    message = school_message(root)
+    if re.search(r'未登录|登录.*(?:失效|过期)|会话.*(?:失效|过期)|session.*(?:invalid|expired)', message, re.I):
+        raise ApiError('学校明确提示登录或会话失效，请重新登录')
 
 
 @dataclass(frozen=True)
@@ -175,25 +193,37 @@ class Client:
         except ValueError:
             raise ApiError('日期格式应为 YYYYMMDD，例如 20261108') from None
         form = {'id': session.user_id, 'dateStr': day}
-        root = self.request('course/get_stu_course_sched.action', form=form, session=session)
-        if text(root, 'STATUS') != '0':
-            raise ApiError(school_message(root) or '课表查询失败，请重新登录')
+        # Match the public UCAS web implementation: query parameters + GET.
+        root = self.request('course/get_stu_course_sched.action', query=form, session=session)
+        check_schedule_auth(root)
         rows = root.get('result')
-        if not isinstance(rows, list):
-            raise ApiError(school_message(root) or '课表响应异常，请重新登录')
-        if not rows:
+        if text(root, 'STATUS') != '0' or not isinstance(rows, list) or not rows:
+            # The Android implementation falls back even when day STATUS is nonzero.
+            # Never turn that status into a login error without explicit evidence.
             week = self.request('course/get_stu_course_sched_week.action', form=form, session=session)
+            check_schedule_auth(week)
             days = week.get('result')
+            # Android's week endpoint uses STATUS=0 for an empty timetable;
+            # nonempty weekly results commonly use STATUS=1.
+            if (text(week, 'STATUS') == '0' and days is None
+                    and text(week, 'ERRCODE') in ('', '0') and not school_message(week)):
+                return []
             if not isinstance(days, list):
-                raise ApiError(school_message(week) or '周课表响应异常，请重新登录')
+                raise schedule_error('周课表', week)
+            if text(week, 'STATUS') not in ('0', '1') or text(week, 'ERRCODE') not in ('', '0'):
+                raise schedule_error('周课表', week)
             rows = []
             for entry in days:
                 if not isinstance(entry, dict):
-                    continue
+                    raise schedule_error('周课表', week)
                 if text(entry, 'dateStr').replace('-', '').replace('/', '') == day:
                     sched = entry.get('schedData')
                     if isinstance(sched, list):
                         rows.extend(sched)
+                    else:
+                        raise schedule_error('周课表', week)
+        if any(not isinstance(r, dict) for r in rows):
+            raise schedule_error('日课表', root)
         return [Course(text(r, 'id') or text(r, 'uuid'), text(r, 'courseName') or '未命名课程',
                        text(r, 'classBeginTime'), text(r, 'classEndTime'), text(r, 'signStatus') == '1')
                 for r in rows if isinstance(r, dict)]
